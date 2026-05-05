@@ -410,6 +410,34 @@ def wait_for_page_settle(page, min_sec=1.5, max_sec=3.5):
         pass
     human_delay(min_sec, max_sec)
 
+def apply_reviews_page_fixes(page):
+    try:
+        page.add_style_tag(content='''
+            iframe[title="Messaging window"],
+            iframe[name="Messaging window"],
+            iframe[title*="Messaging" i],
+            iframe[name*="Messaging" i] {
+              display: none !important;
+              visibility: hidden !important;
+              pointer-events: none !important;
+            }
+            header.fixed {
+              pointer-events: none !important;
+            }
+        ''')
+    except:
+        pass
+
+    try:
+        page.evaluate("document.body.style.zoom = '65%'")
+    except:
+        pass
+
+    try:
+        page.keyboard.press("Escape")
+    except:
+        pass
+
 def type_like_human(locator, text, clear_first=True):
     target = locator.first
     target.wait_for(state="visible", timeout=20000)
@@ -959,18 +987,39 @@ def extract_booking_reference_from_details(page, card):
     except:
         pass
 
-    wait_for_page_settle(page, 0.6, 1.4)
+    apply_reviews_page_fixes(page)
+
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        try:
+            dialog = page.locator('[role="dialog"]').last
+            dialog_text = _safe_inner_text(dialog, "")
+            ref = extract_booking_reference_from_text(dialog_text)
+            if ref:
+                try:
+                    page.keyboard.press("Escape")
+                except:
+                    pass
+                return ref
+        except:
+            pass
+
+        try:
+            body_text = page.evaluate("() => (document.body && document.body.innerText ? document.body.innerText : '')")
+            ref = extract_booking_reference_from_text(body_text)
+            if ref:
+                try:
+                    page.keyboard.press("Escape")
+                except:
+                    pass
+                return ref
+        except:
+            pass
+
+        time.sleep(0.5)
 
     try:
-        dialog = page.locator('[role="dialog"]').last
-        dialog_text = _safe_inner_text(dialog, "")
-        ref = extract_booking_reference_from_text(dialog_text)
-        if ref:
-            try:
-                page.keyboard.press("Escape")
-            except:
-                pass
-            return ref
+        pass
     except:
         pass
 
@@ -1245,10 +1294,9 @@ def scrape_cycle_in_session(browser, context, page, owns_browser, recreate_fresh
             try:
                 if not ensure_reviews_loaded(page, page_num):
                     raise TimeoutError("Reviews failed to load after retries.")
-                
-                # Zoom out to 65% to prevent element overlap and ensure 'Show details' is clickable
-                page.evaluate("document.body.style.zoom = '65%'")
-                human_delay(1, 2)
+
+                apply_reviews_page_fixes(page)
+                human_delay(0.8, 1.6)
             except CycleRestartRequested:
                 raise
             except Exception:
