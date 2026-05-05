@@ -14,6 +14,7 @@ import time
 import random
 import threading
 import multiprocessing as mp
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
@@ -925,6 +926,84 @@ def parse_review_date(date_text):
 
     return None
 
+_BOOKING_REF_RE = re.compile(r"\bGYG[A-Z0-9]{6,20}\b")
+
+def _safe_inner_text(locator, fallback=""):
+    try:
+        if locator.count() > 0 and locator.first.is_visible():
+            return locator.first.inner_text()
+    except:
+        pass
+    return fallback
+
+def extract_booking_reference_from_text(text):
+    if not text:
+        return None
+    for line in str(text).split("\n"):
+        if "Booking reference" in line:
+            candidate = line.replace("Booking reference", "").strip().replace(":", "").strip()
+            if candidate:
+                return candidate
+    match = _BOOKING_REF_RE.search(str(text))
+    return match.group(0) if match else None
+
+def extract_booking_reference_from_details(page, card):
+    try:
+        expand_btn = card.locator('[data-testid="review-card-expand"]')
+        if expand_btn.count() > 0 and expand_btn.first.is_visible():
+            click_like_human(expand_btn, force=True)
+        else:
+            show_details = card.locator('button:has-text("Show details")')
+            if show_details.count() > 0 and show_details.first.is_visible():
+                click_like_human(show_details, force=True)
+    except:
+        pass
+
+    wait_for_page_settle(page, 0.6, 1.4)
+
+    try:
+        dialog = page.locator('[role="dialog"]').last
+        dialog_text = _safe_inner_text(dialog, "")
+        ref = extract_booking_reference_from_text(dialog_text)
+        if ref:
+            try:
+                page.keyboard.press("Escape")
+            except:
+                pass
+            return ref
+    except:
+        pass
+
+    try:
+        card_text_after = card.inner_text()
+        ref = extract_booking_reference_from_text(card_text_after)
+        if ref:
+            try:
+                page.keyboard.press("Escape")
+            except:
+                pass
+            return ref
+    except:
+        pass
+
+    try:
+        body_text = page.evaluate("() => (document.body && document.body.innerText ? document.body.innerText : '')")
+        ref = extract_booking_reference_from_text(body_text)
+        if ref:
+            try:
+                page.keyboard.press("Escape")
+            except:
+                pass
+            return ref
+    except:
+        pass
+
+    try:
+        page.keyboard.press("Escape")
+    except:
+        pass
+    return None
+
 def sync_to_airtable(review_data):
     booking_ref = review_data.get("booking_reference")
     if not booking_ref or booking_ref == "N/A":
@@ -1205,22 +1284,28 @@ def scrape_cycle_in_session(browser, context, page, owns_browser, recreate_fresh
                     comment_el = card.locator('[data-testid="review-card-comment"]')
                     comment = comment_el.first.inner_text() if comment_el.count() > 0 else "No comment"
 
-                    booking_ref = "N/A"
-                    booking_ref_el = card.locator('[data-testid="Booking reference"]')
-                    if booking_ref_el.count() > 0:
-                        booking_ref = booking_ref_el.first.inner_text().replace("Booking reference", "").strip().replace(":", "").strip()
+                    booking_ref = None
+                    card_text = ""
+                    try:
+                        booking_ref_el = card.locator('[data-testid="Booking reference"]')
+                        if booking_ref_el.count() > 0 and booking_ref_el.first.is_visible():
+                            booking_ref = extract_booking_reference_from_text(booking_ref_el.first.inner_text())
+                    except:
+                        pass
 
-                    if booking_ref == "N/A":
+                    if not booking_ref:
                         try:
                             card_text = card.inner_text()
-                            for line in card_text.split('\n'):
-                                if "Booking reference" in line:
-                                    booking_ref = line.replace("Booking reference", "").strip().replace(":", "").strip()
-                                    break
                         except:
                             card_text = "Failed to extract text"
+                        booking_ref = extract_booking_reference_from_text(card_text)
 
-                    if booking_ref == "N/A":
+                    if not booking_ref:
+                        booking_ref = extract_booking_reference_from_details(page, card)
+                        if booking_ref:
+                            log(f"Booking reference extracted via details: {booking_ref}", "DEBUG")
+
+                    if not booking_ref:
                         log(f"Could not find Booking Reference for review {index}. Skipping.", "WARNING")
                         log(f"Raw card text for review {index}: {card_text[:500]}...", "DEBUG")
                         continue
