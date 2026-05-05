@@ -551,6 +551,15 @@ def close_extra_tabs(context, keep_pages=1):
             pass
     return primary
 
+def ensure_single_tab(context, page):
+    primary = close_extra_tabs(context, keep_pages=1) or page
+    try:
+        if page != primary:
+            page = primary
+    except:
+        page = primary
+    return page
+
 def detect_security_interstitial(page):
     try:
         url = (page.url or "").lower()
@@ -976,6 +985,12 @@ def extract_booking_reference_from_text(text):
     return match.group(0) if match else None
 
 def extract_booking_reference_from_details(page, card):
+    opened_pages_before = 0
+    try:
+        opened_pages_before = len(list(page.context.pages))
+    except:
+        opened_pages_before = 0
+
     try:
         expand_btn = card.locator('[data-testid="review-card-expand"]')
         if expand_btn.count() > 0 and expand_btn.first.is_visible():
@@ -984,6 +999,13 @@ def extract_booking_reference_from_details(page, card):
             show_details = card.locator('button:has-text("Show details")')
             if show_details.count() > 0 and show_details.first.is_visible():
                 click_like_human(show_details, force=True)
+    except:
+        pass
+
+    try:
+        opened_pages_after = len(list(page.context.pages))
+        if opened_pages_after > opened_pages_before:
+            page = ensure_single_tab(page.context, page)
     except:
         pass
 
@@ -1284,8 +1306,20 @@ def scrape_cycle_in_session(browser, context, page, owns_browser, recreate_fresh
 
         log("Starting scrape...")
 
+        try:
+            log("Warm-up navigation: page 2 then back to page 1...", "INFO")
+            page = ensure_single_tab(context, page)
+            navigate_with_delay(page, build_reviews_url(1), 2, 4)
+            apply_reviews_page_fixes(page)
+            navigate_with_delay(page, build_reviews_url(0), 2, 4)
+            apply_reviews_page_fixes(page)
+        except Exception as e:
+            log(f"Warm-up navigation skipped due to: {e}", "WARNING")
+
         for page_num in range(MAX_PAGES):
             log(f"Processing Page {page_num + 1}")
+
+            page = ensure_single_tab(context, page)
 
             current_url = page.url.lower()
             if "login" in current_url or "signin" in current_url or has_login_form(page):
