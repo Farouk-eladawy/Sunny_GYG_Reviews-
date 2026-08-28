@@ -1206,6 +1206,33 @@ def send_negative_review_webhook(review_data):
     except Exception as e:
         log(f"Webhook Error: {e}", "ERROR")
 
+def get_reply_blocked_terms():
+    raw = os.getenv("REPLY_BLOCKED_TERMS", "")
+    terms = [t.strip() for t in raw.split(",") if t.strip()]
+    defaults = ["FTS Travels", "FTS Travel", "FTS", "Fun Time Booking", "Fun Time"]
+    for term in defaults:
+        if term not in terms:
+            terms.append(term)
+    return sorted(set(terms), key=len, reverse=True)
+
+def sanitize_reply_branding(reply):
+    if not reply:
+        return reply
+    text = reply
+    for term in get_reply_blocked_terms():
+        text = re.sub(re.escape(term), "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    text = re.sub(r"\s+([,.!?])", r"\1", text)
+    return text
+
+def reply_brand_rules():
+    return (
+        "- NEVER mention any company name, brand name, supplier name, or business name "
+        "(e.g. do not write FTS, FTS Travels, or any partner/agency name).\n"
+        "- Refer to the service generically only (e.g. 'our team', 'we').\n"
+        "- Do not use placeholders like [Your Name]. Sign off as 'The Team' only."
+    )
+
 def generate_reply(review_text, rating, customer_name="Traveler", is_no_show=False):
     if not DEEPSEEK_API_KEY:
         log("No DeepSeek API Key provided.", "WARNING")
@@ -1219,6 +1246,7 @@ def generate_reply(review_text, rating, customer_name="Traveler", is_no_show=Fal
         "Content-Type": "application/json"
     }
     
+    brand_rules = reply_brand_rules()
     if is_no_show:
         prompt = f"""
         You are a professional customer service representative for a travel agency.
@@ -1230,6 +1258,7 @@ def generate_reply(review_text, rating, customer_name="Traveler", is_no_show=Fal
         - Gently clarify that the driver was at the pickup location as scheduled.
         - Maintain a courteous and professional tone.
         - Do not be aggressive.
+        {brand_rules}
         
         Review: "{review_text}"
         """
@@ -1247,13 +1276,19 @@ def generate_reply(review_text, rating, customer_name="Traveler", is_no_show=Fal
         - Keep it concise (under 300 characters if possible).
         - Be grateful for positive feedback.
         - Be empathetic and solution-oriented for negative feedback.
-        - Do not use placeholders like [Your Name]. Sign off as "The Team".
+        {brand_rules}
         """
     
     data = {
         "model": "deepseek-chat", # or deepseek-coder, usually chat is better for this
         "messages": [
-            {"role": "system", "content": "You are a helpful assistant writing responses to customer reviews."},
+            {
+                "role": "system",
+                "content": (
+                    "You write short, professional replies to customer reviews. "
+                    "Never include any company name, brand name, supplier name, or business name in the reply."
+                ),
+            },
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.7
@@ -1267,6 +1302,7 @@ def generate_reply(review_text, rating, customer_name="Traveler", is_no_show=Fal
         # Remove quotes if AI added them
         if reply.startswith('"') and reply.endswith('"'):
             reply = reply[1:-1]
+        reply = sanitize_reply_branding(reply)
         log(f"AI Reply Generated: {reply[:50]}...", "SUCCESS")
         return reply
     except Exception as e:
